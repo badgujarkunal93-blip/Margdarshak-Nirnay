@@ -109,12 +109,13 @@ function App() {
 
   useEffect(() => {
     if (!adminAuthed) return
+    if (isDemo) return
     if (isSupabaseConfigured) {
       void loadSupabaseData()
     } else {
       enterDemo()
     }
-  }, [adminAuthed])
+  }, [adminAuthed, isDemo])
 
   useEffect(() => {
     if (!adminAuthed || !isSupabaseConfigured || isDemo) return
@@ -164,7 +165,25 @@ function App() {
   }
 
   const login = async (email: string, password: string) => {
-    if (email !== ADMIN_EMAIL || password !== ADMIN_PASSWORD) throw new Error('Invalid admin credentials.')
+    if (!isSupabaseConfigured) {
+      if (email !== ADMIN_EMAIL || password !== ADMIN_PASSWORD) throw new Error('Invalid admin credentials.')
+      localStorage.setItem(AUTH_KEY, 'true')
+      setAdminAuthed(true)
+      return
+    }
+
+    const { data: authData, error } = await supabase.auth.signInWithPassword({
+      email: email.trim(),
+      password,
+    })
+
+    if (error) throw error
+
+    if (authData.user?.email !== ADMIN_EMAIL) {
+      await supabase.auth.signOut()
+      throw new Error('Unauthorized: Only the admin account can access this dashboard.')
+    }
+
     localStorage.setItem(AUTH_KEY, 'true')
     setAdminAuthed(true)
   }
@@ -174,6 +193,9 @@ function App() {
     setAdminAuthed(false)
     setIsDemo(false)
     setData(emptyData)
+    if (isSupabaseConfigured) {
+      void supabase.auth.signOut()
+    }
   }
 
   const saveCapList = async (studentId: string, notes: string, preferences: GeneratedPreference[]) => {
@@ -234,6 +256,34 @@ function App() {
     }))
   }
 
+  const confirmPayment = async (studentId: string) => {
+    if (isDemo) {
+      setData((current) => ({
+        ...current,
+        students: current.students.map((student) =>
+          student.id === studentId ? { ...student, payment_status: 'confirmed' } : student
+        ),
+      }))
+      return
+    }
+
+    const { data: updated, error } = await supabase
+      .from('students')
+      .update({ payment_status: 'confirmed' })
+      .eq('id', studentId)
+      .select('*')
+      .single()
+
+    if (error) throw error
+
+    setData((current) => ({
+      ...current,
+      students: current.students.map((student) =>
+        student.id === studentId ? (updated as Student) : student
+      ),
+    }))
+  }
+
   const addCutoffRows = async (rows: Cutoff[]) => {
     if (isDemo) {
       setData((current) => ({ ...current, cutoffs: [...rows, ...current.cutoffs] }))
@@ -265,9 +315,9 @@ function App() {
         <LoadingPanel label="Loading Margdarshak Nirnay..." />
       ) : (
         <Routes>
-          <Route path="/" element={<DashboardPage data={data} />} />
+          <Route path="/" element={<DashboardPage data={data} onConfirm={confirmPayment} />} />
           <Route path="/students" element={<StudentsPage data={data} />} />
-          <Route path="/students/:id" element={<StudentDetailPage data={data} onSaveCapList={saveCapList} />} />
+          <Route path="/students/:id" element={<StudentDetailPage data={data} onSaveCapList={saveCapList} onConfirm={confirmPayment} />} />
           <Route path="/cap-lists" element={<CapListsPage data={data} />} />
           <Route path="/cutoffs" element={<CutoffPage data={data} onAddRows={addCutoffRows} />} />
           <Route path="/groups" element={<GroupsPage data={data} onToggle={toggleGroup} />} />
@@ -393,9 +443,10 @@ function AdminShell({ isDemo, onLogout, children }: { isDemo: boolean; onLogout:
   )
 }
 
-function DashboardPage({ data }: { data: DashboardData }) {
+function DashboardPage({ data, onConfirm }: { data: DashboardData; onConfirm: (studentId: string) => Promise<void> }) {
   const recent = data.students.slice(0, 6)
   const changed = data.students.filter(isRecentlyUpdated)
+  const pendingPayments = data.students.filter((student) => student.payment_status === 'pending')
   const byTier = {
     Explorer: data.students.filter((student) => student.membership_tier === 'Explorer').length,
     Guide: data.students.filter((student) => student.membership_tier === 'Guide').length,
@@ -412,13 +463,37 @@ function DashboardPage({ data }: { data: DashboardData }) {
         <Stat label="Group" value={byTier.Group.toString()} />
         <Stat label="Updated 24h" value={changed.length.toString()} accent />
       </section>
-      <section className="grid gap-5 lg:grid-cols-[1fr_1fr]">
+      <section className="grid gap-5 lg:grid-cols-3">
+        <Panel title="Pending payments">
+          <div className="grid gap-3">
+            {pendingPayments.length ? (
+              pendingPayments.map((student) => (
+                <div key={student.id} className="rounded-md border border-orange-200 bg-orange-50/50 p-3 flex items-center justify-between gap-3 text-sm">
+                  <div>
+                    <Link to={`/students/${student.id}`} className="font-black text-[#185FA5] hover:underline">
+                      {student.name}
+                    </Link>
+                    <p className="mt-1 font-bold text-slate-500">{student.membership_tier} · ₹{tierPrice(student.membership_tier)}</p>
+                  </div>
+                  <button
+                    onClick={() => onConfirm(student.id)}
+                    className="rounded-md bg-emerald-600 px-2.5 py-1.5 text-xs font-black text-white hover:bg-emerald-700 shadow-sm"
+                  >
+                    Confirm
+                  </button>
+                </div>
+              ))
+            ) : (
+              <EmptyState title="All clear!" text="No pending payment activations." />
+            )}
+          </div>
+        </Panel>
         <Panel title="Recent registrations">
           <div className="grid gap-3">
             {recent.map((student) => <StudentMini key={student.id} student={student} />)}
           </div>
         </Panel>
-        <Panel title="Shortlists updated in last 24 hours">
+        <Panel title="Shortlists updated (24h)">
           <div className="grid gap-3">
             {changed.length ? changed.map((student) => <StudentMini key={student.id} student={student} highlight />) : <EmptyState title="No recent updates" text="Student shortlist activity will appear here." />}
           </div>
@@ -463,6 +538,7 @@ function StudentsPage({ data }: { data: DashboardData }) {
             <th className="table-cell">Category</th>
             <th className="table-cell">District</th>
             <th className="table-cell">Tier</th>
+            <th className="table-cell">Payment</th>
             <th className="table-cell">Phone</th>
             <th className="table-cell">Registered</th>
             <th className="table-cell">Shortlist updated</th>
@@ -478,6 +554,13 @@ function StudentsPage({ data }: { data: DashboardData }) {
               <td className="table-cell">{student.category ?? 'Pending'}</td>
               <td className="table-cell">{student.region ?? 'All'}</td>
               <td className="table-cell"><TierPill tier={student.membership_tier ?? 'No plan'} /></td>
+              <td className="table-cell">
+                <span className={`inline-flex rounded-md px-2 py-0.5 text-xs font-black ring-1 ${
+                  student.payment_status === 'confirmed' ? 'bg-emerald-50 text-emerald-700 ring-emerald-200' : 'bg-orange-50 text-orange-700 ring-orange-200'
+                }`}>
+                  {student.payment_status === 'confirmed' ? 'Confirmed' : 'Pending'}
+                </span>
+              </td>
               <td className="table-cell">{student.phone}</td>
               <td className="table-cell">{formatDate(student.created_at)}</td>
               <td className="table-cell">{formatDate(student.updated_at)}</td>
@@ -510,7 +593,7 @@ function CapListsPage({ data }: { data: DashboardData }) {
   )
 }
 
-function StudentDetailPage({ data, onSaveCapList }: { data: DashboardData; onSaveCapList: (studentId: string, notes: string, preferences: GeneratedPreference[]) => Promise<void> }) {
+function StudentDetailPage({ data, onSaveCapList, onConfirm }: { data: DashboardData; onSaveCapList: (studentId: string, notes: string, preferences: GeneratedPreference[]) => Promise<void>; onConfirm: (studentId: string) => Promise<void> }) {
   const { id } = useParams()
   const student = data.students.find((item) => item.id === id)
   const [category, setCategory] = useState<Category>((student?.category ?? 'General') as Category)
@@ -635,11 +718,12 @@ function StudentDetailPage({ data, onSaveCapList }: { data: DashboardData; onSav
       <PageHeader icon={UserRound} title={student.name} text="Generate and edit this student's CAP preference list." />
       <section className="grid gap-5 lg:grid-cols-[1fr_360px]">
         <Panel title="Student profile">
-          <div className="grid grid-cols-5 gap-3">
+          <div className="grid grid-cols-6 gap-3">
             <Info label="Rank" value={student.rank.toLocaleString('en-IN')} />
             <Info label="Category" value={student.category ?? 'Pending'} />
             <Info label="District" value={student.region ?? 'All'} />
             <Info label="Tier" value={student.membership_tier ?? 'No plan'} />
+            <Info label="Payment" value={student.payment_status === 'confirmed' ? 'Confirmed' : 'Pending'} />
             <Info label="Phone" value={student.phone} />
           </div>
           <div className="mt-5 grid grid-cols-3 gap-3">
@@ -659,6 +743,22 @@ function StudentDetailPage({ data, onSaveCapList }: { data: DashboardData; onSav
             </label>
           </div>
           <div className="mt-5 flex gap-3">
+            {student.payment_status === 'pending' ? (
+              <button
+                onClick={async () => {
+                  try {
+                    setStatus('Confirming payment...')
+                    await onConfirm(student.id)
+                    setStatus('Payment confirmed successfully.')
+                  } catch {
+                    setStatus('Failed to confirm payment.')
+                  }
+                }}
+                className="inline-flex items-center gap-2 rounded-md bg-emerald-600 px-4 py-3 font-black text-white hover:bg-emerald-700 shadow-sm"
+              >
+                Confirm Payment Receipt
+              </button>
+            ) : null}
             <button onClick={generateCapList} className="rounded-md bg-[#F97316] px-4 py-3 font-black text-white hover:bg-orange-600">
               Generate CAP List
             </button>
@@ -978,6 +1078,11 @@ function safetyForRank(rank: number, cutoffRank: number | null | undefined): Saf
   if (cutoff >= rank * 1.1) return 'SAFE'
   if (cutoff >= rank * 0.9) return 'MODERATE'
   return 'REACH'
+}
+
+function tierPrice(tier: string | null | undefined): string {
+  const prices: Record<string, string> = { Explorer: '199', Guide: '399', Group: '897' }
+  return prices[tier ?? ''] ?? '199'
 }
 
 export default App
