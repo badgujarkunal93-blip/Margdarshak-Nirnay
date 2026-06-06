@@ -63,6 +63,7 @@ type DashboardData = {
   capLists: CapList[]
   capListItems: CapListItem[]
   groups: GroupInvite[]
+  branches: Branch[]
 }
 
 const emptyData: DashboardData = {
@@ -73,6 +74,7 @@ const emptyData: DashboardData = {
   capLists: [],
   capListItems: [],
   groups: [],
+  branches: [],
 }
 
 function App() {
@@ -130,6 +132,7 @@ function App() {
       capLists: (capLists ?? []) as CapList[],
       capListItems: (capItems ?? []) as CapListItem[],
       groups: (groups ?? []) as GroupInvite[],
+      branches: (dbBranches ?? []) as Branch[],
     })
     setLoading(false)
   }
@@ -344,7 +347,7 @@ function App() {
         <Routes>
           <Route path="/" element={<DashboardPage data={data} onConfirm={confirmPayment} />} />
           <Route path="/students" element={<StudentsPage data={data} />} />
-          <Route path="/students/:id" element={<StudentDetailPage data={data} onSaveCapList={saveCapList} onConfirm={confirmPayment} />} />
+          <Route path="/students/:id" element={<StudentDetailPage data={data} onSaveCapList={saveCapList} onConfirm={confirmPayment} isDemo={isDemo} />} />
           <Route path="/cap-lists" element={<CapListsPage data={data} />} />
           <Route path="/cutoffs" element={<CutoffPage data={data} onAddRows={addCutoffRows} />} />
           <Route path="/groups" element={<GroupsPage data={data} onToggle={toggleGroup} />} />
@@ -614,7 +617,7 @@ function CapListsPage({ data }: { data: DashboardData }) {
   )
 }
 
-function StudentDetailPage({ data, onSaveCapList, onConfirm }: { data: DashboardData; onSaveCapList: (studentId: string, notes: string, preferences: GeneratedPreference[]) => Promise<void>; onConfirm: (studentId: string) => Promise<void> }) {
+function StudentDetailPage({ data, onSaveCapList, onConfirm, isDemo }: { data: DashboardData; onSaveCapList: (studentId: string, notes: string, preferences: GeneratedPreference[]) => Promise<void>; onConfirm: (studentId: string) => Promise<void>; isDemo: boolean }) {
   const { id } = useParams()
   const student = data.students.find((item) => item.id === id)
   const [category, setCategory] = useState<Category>((student?.category ?? 'General') as Category)
@@ -627,6 +630,71 @@ function StudentDetailPage({ data, onSaveCapList, onConfirm }: { data: Dashboard
   const [saving, setSaving] = useState(false)
   const sensors = useSensors(useSensor(PointerSensor))
 
+  const [localCutoffs, setLocalCutoffs] = useState<Cutoff[]>([])
+  const [loadingLocalCutoffs, setLoadingLocalCutoffs] = useState(false)
+
+  useEffect(() => {
+    if (isDemo || !isSupabaseConfigured) {
+      setLocalCutoffs(data.cutoffs)
+      return
+    }
+
+    const fetchLocalCutoffs = async () => {
+      setLoadingLocalCutoffs(true)
+      try {
+        const pageSize = 1000
+        const { data: firstPage, error: firstPageError, count } = await supabase
+          .from('cutoffs')
+          .select('*', { count: 'exact' })
+          .eq('category', category)
+          .order('year', { ascending: false })
+          .range(0, pageSize - 1)
+
+        if (firstPageError) throw firstPageError
+        const rawCutoffs = [...(firstPage ?? [])]
+
+        if (count && count > pageSize) {
+          const remainingPages = Math.ceil(count / pageSize) - 1
+          const promises = Array.from({ length: remainingPages }, (_, i) => {
+            const pageNum = i + 1
+            return supabase
+              .from('cutoffs')
+              .select('*')
+              .eq('category', category)
+              .order('year', { ascending: false })
+              .range(pageNum * pageSize, (pageNum + 1) * pageSize - 1)
+          })
+
+          const results = await Promise.all(promises)
+          for (const res of results) {
+            if (res.error) throw res.error
+            if (res.data) {
+              rawCutoffs.push(...res.data)
+            }
+          }
+        }
+
+        const mapped = rawCutoffs.map((c: any) => {
+          const branchObj = data.branches.find((b) => b.branch_code === c.branch_code)
+          return {
+            ...c,
+            branch: branchObj ? (branchObj.branch_name || branchObj.name || '') : c.branch_code || '',
+            round: `Round ${c.round}`,
+            rank_cutoff: c.closing_rank ?? c.opening_rank ?? 0,
+          }
+        }) as Cutoff[]
+
+        setLocalCutoffs(mapped)
+      } catch (err) {
+        console.error('Error fetching local cutoffs:', err)
+      } finally {
+        setLoadingLocalCutoffs(false)
+      }
+    }
+
+    void fetchLocalCutoffs()
+  }, [category, isDemo, data.branches])
+
   if (!student) return <EmptyState title="Student not found" text="Return to Students and select a valid student." />
 
   const shortlist = data.shortlists.filter((item) => item.student_id === student.id).sort((a, b) => a.priority_order - b.priority_order)
@@ -636,7 +704,7 @@ function StudentDetailPage({ data, onSaveCapList, onConfirm }: { data: Dashboard
     const shortlistPrefs = shortlist
       .map((item): GeneratedPreference | null => {
         const college = data.colleges.find((entry) => entry.id === item.college_id)
-        const cutoff = data.cutoffs.find((entry) => entry.college_id === item.college_id && entry.branch === item.branch && entry.category === category)
+        const cutoff = localCutoffs.find((entry) => entry.college_id === item.college_id && entry.branch === item.branch && entry.category === category)
         if (!college) return null
         const rank = cutoffRank(cutoff)
         return {
@@ -655,7 +723,7 @@ function StudentDetailPage({ data, onSaveCapList, onConfirm }: { data: Dashboard
       .filter((item): item is GeneratedPreference => Boolean(item))
 
     const shortlistKeys = new Set(shortlistPrefs.map((item) => item.id))
-    const generated = data.cutoffs
+    const generated = localCutoffs
       .filter((cutoff) => cutoff.category === category)
       .map((cutoff): GeneratedPreference | null => {
         const college = data.colleges.find((item) => item.id === cutoff.college_id)
@@ -703,7 +771,7 @@ function StudentDetailPage({ data, onSaveCapList, onConfirm }: { data: Dashboard
   const addManual = () => {
     const college = data.colleges.find((item) => item.id === selectedCollege)
     if (!college || !selectedBranch) return
-    const cutoff = data.cutoffs.find((item) => item.college_id === college.id && item.branch === selectedBranch && item.category === category)
+    const cutoff = localCutoffs.find((item) => item.college_id === college.id && item.branch === selectedBranch && item.category === category)
     const rank = cutoffRank(cutoff)
     setPreferences((current) => [
       ...current,
