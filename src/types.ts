@@ -97,3 +97,12 @@ export type GroupInvite = {
   is_active?: boolean | null
   created_at?: string
 }
+
+export type Branch = {
+  id: string
+  college_id?: string | null
+  name?: string | null
+  branch?: string | null
+  branch_name?: string | null
+  branch_code?: string | null
+}

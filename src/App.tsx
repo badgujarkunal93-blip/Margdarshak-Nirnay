@@ -36,6 +36,7 @@ import {
 } from './data/demo'
 import { isSupabaseConfigured, supabase } from './lib/supabase'
 import type {
+  Branch,
   CapList,
   CapListItem,
   Category,
@@ -204,6 +205,7 @@ function App() {
           is_active: true,
         },
       ],
+      branches: [],
     })
   }
 
@@ -644,7 +646,6 @@ function StudentDetailPage({ data, onSaveCapList, onConfirm, isDemo }: { data: D
   const sensors = useSensors(useSensor(PointerSensor))
 
   const [localCutoffs, setLocalCutoffs] = useState<Cutoff[]>([])
-  const [loadingLocalCutoffs, setLoadingLocalCutoffs] = useState(false)
 
   useEffect(() => {
     if (isDemo || !isSupabaseConfigured) {
@@ -653,7 +654,6 @@ function StudentDetailPage({ data, onSaveCapList, onConfirm, isDemo }: { data: D
     }
 
     const fetchLocalCutoffs = async () => {
-      setLoadingLocalCutoffs(true)
       try {
         const pageSize = 1000
         const { data: firstPage, error: firstPageError, count } = await supabase
@@ -700,8 +700,6 @@ function StudentDetailPage({ data, onSaveCapList, onConfirm, isDemo }: { data: D
         setLocalCutoffs(mapped)
       } catch (err) {
         console.error('Error fetching local cutoffs:', err)
-      } finally {
-        setLoadingLocalCutoffs(false)
       }
     }
 
