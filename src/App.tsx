@@ -86,6 +86,23 @@ function App() {
 
   const loadSupabaseData = async () => {
     setLoading(true)
+
+    // Load branches in pages to bypass the 1,000 row limit
+    const branchesList: any[] = []
+    let branchesPage = 0
+    const branchesPageSize = 1000
+    while (true) {
+      const { data: pageBranches, error } = await supabase
+        .from('branches')
+        .select('*')
+        .range(branchesPage * branchesPageSize, (branchesPage + 1) * branchesPageSize - 1)
+      if (error) throw error
+      if (!pageBranches || pageBranches.length === 0) break
+      branchesList.push(...pageBranches)
+      if (pageBranches.length < branchesPageSize) break
+      branchesPage++
+    }
+
     const [
       { data: students },
       { data: dbColleges },
@@ -94,7 +111,6 @@ function App() {
       { data: capLists },
       { data: capItems },
       { data: groups },
-      { data: dbBranches },
     ] = await Promise.all([
       supabase.from('students').select('*').order('created_at', { ascending: false }),
       supabase.from('colleges').select('*').order('name'),
@@ -103,10 +119,7 @@ function App() {
       supabase.from('cap_lists').select('*').order('updated_at', { ascending: false }),
       supabase.from('cap_list_items').select('*').order('priority_order'),
       supabase.from('group_invites').select('*').order('created_at', { ascending: false }),
-      supabase.from('branches').select('*'),
     ])
-
-    const branchesList = (dbBranches ?? []) as any[]
 
     const colleges = (dbColleges ?? []).map((c: any) => ({
       ...c,
@@ -132,7 +145,7 @@ function App() {
       capLists: (capLists ?? []) as CapList[],
       capListItems: (capItems ?? []) as CapListItem[],
       groups: (groups ?? []) as GroupInvite[],
-      branches: (dbBranches ?? []) as Branch[],
+      branches: branchesList as Branch[],
     })
     setLoading(false)
   }
