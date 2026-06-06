@@ -84,21 +84,48 @@ function App() {
 
   const loadSupabaseData = async () => {
     setLoading(true)
-    const [{ data: students }, { data: colleges }, { data: cutoffs }, { data: shortlists }, { data: capLists }, { data: capItems }, { data: groups }] =
-      await Promise.all([
-        supabase.from('students').select('*').order('created_at', { ascending: false }),
-        supabase.from('colleges').select('*').order('name'),
-        supabase.from('cutoffs').select('*').order('year', { ascending: false }),
-        supabase.from('shortlists').select('*').order('priority_order'),
-        supabase.from('cap_lists').select('*').order('updated_at', { ascending: false }),
-        supabase.from('cap_list_items').select('*').order('priority_order'),
-        supabase.from('group_invites').select('*').order('created_at', { ascending: false }),
-      ])
+    const [
+      { data: students },
+      { data: dbColleges },
+      { data: dbCutoffs },
+      { data: shortlists },
+      { data: capLists },
+      { data: capItems },
+      { data: groups },
+      { data: dbBranches },
+    ] = await Promise.all([
+      supabase.from('students').select('*').order('created_at', { ascending: false }),
+      supabase.from('colleges').select('*').order('name'),
+      supabase.from('cutoffs').select('*').order('year', { ascending: false }),
+      supabase.from('shortlists').select('*').order('priority_order'),
+      supabase.from('cap_lists').select('*').order('updated_at', { ascending: false }),
+      supabase.from('cap_list_items').select('*').order('priority_order'),
+      supabase.from('group_invites').select('*').order('created_at', { ascending: false }),
+      supabase.from('branches').select('*'),
+    ])
+
+    const branchesList = (dbBranches ?? []) as any[]
+
+    const colleges = (dbColleges ?? []).map((c: any) => ({
+      ...c,
+      location: c.city || c.address || '',
+      branches: branchesList.filter((b) => b.college_id === c.id).map((b) => b.branch_name || b.name || ''),
+    })) as College[]
+
+    const cutoffs = (dbCutoffs ?? []).map((c: any) => {
+      const branchObj = branchesList.find((b) => b.branch_code === c.branch_code)
+      return {
+        ...c,
+        branch: branchObj ? (branchObj.branch_name || branchObj.name || '') : c.branch_code || '',
+        round: `Round ${c.round}`,
+        rank_cutoff: c.closing_rank ?? c.opening_rank ?? 0,
+      }
+    }) as Cutoff[]
 
     setData({
       students: (students ?? []) as Student[],
-      colleges: (colleges ?? []) as College[],
-      cutoffs: (cutoffs ?? []) as Cutoff[],
+      colleges,
+      cutoffs,
       shortlists: (shortlists ?? []) as Shortlist[],
       capLists: (capLists ?? []) as CapList[],
       capListItems: (capItems ?? []) as CapListItem[],
@@ -306,7 +333,7 @@ function App() {
     if (!isDemo) await supabase.from('group_invites').update({ is_active: next }).eq('id', group.id)
   }
 
-  if (!adminAuthed) return <AdminLogin onLogin={login} onDemo={enterDemo} />
+  if (!adminAuthed) return <AdminLogin onLogin={login} />
 
   return (
     <AdminShell isDemo={isDemo} onLogout={logout}>
@@ -329,9 +356,9 @@ function App() {
   )
 }
 
-function AdminLogin({ onLogin, onDemo }: { onLogin: (email: string, password: string) => Promise<void>; onDemo: () => void }) {
-  const [email, setEmail] = useState(ADMIN_EMAIL)
-  const [password, setPassword] = useState(ADMIN_PASSWORD)
+function AdminLogin({ onLogin }: { onLogin: (email: string, password: string) => Promise<void> }) {
+  const [email, setEmail] = useState('')
+  const [password, setPassword] = useState('')
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
 
@@ -368,22 +395,19 @@ function AdminLogin({ onLogin, onDemo }: { onLogin: (email: string, password: st
             <LockKeyhole className="size-6" />
           </div>
           <h2 className="mt-5 text-2xl font-black text-[#185FA5]">Admin login</h2>
-          <p className="mt-2 text-sm font-semibold text-slate-600">Hardcoded credentials for the private counsellor dashboard.</p>
+          <p className="mt-2 text-sm font-semibold text-slate-600">Enter your counsellor admin credentials to access Nirnay.</p>
           <label className="mt-6 grid gap-2 text-sm font-bold text-[#185FA5]">
             Email
-            <input className="input" value={email} onChange={(event) => setEmail(event.target.value)} />
+            <input className="input" placeholder="admin@example.com" value={email} onChange={(event) => setEmail(event.target.value)} />
           </label>
           <label className="mt-4 grid gap-2 text-sm font-bold text-[#185FA5]">
             Password
-            <input className="input" type="password" value={password} onChange={(event) => setPassword(event.target.value)} />
+            <input className="input" type="password" placeholder="••••••••" value={password} onChange={(event) => setPassword(event.target.value)} />
           </label>
           {error ? <p className="mt-4 rounded-md bg-red-50 px-4 py-3 text-sm font-bold text-red-700">{error}</p> : null}
           <button className="mt-6 inline-flex w-full items-center justify-center gap-2 rounded-md bg-[#F97316] px-4 py-3 font-black text-white hover:bg-orange-600">
             {loading ? <Loader2 className="size-4 animate-spin" /> : <LockKeyhole className="size-4" />}
             Login
-          </button>
-          <button type="button" onClick={onDemo} className="mt-3 w-full rounded-md border border-[#185FA5]/20 px-4 py-3 font-black text-[#185FA5] hover:bg-blue-50">
-            Preview with demo data
           </button>
         </form>
       </div>
@@ -450,17 +474,15 @@ function DashboardPage({ data, onConfirm }: { data: DashboardData; onConfirm: (s
   const byTier = {
     Explorer: data.students.filter((student) => student.membership_tier === 'Explorer').length,
     Guide: data.students.filter((student) => student.membership_tier === 'Guide').length,
-    Group: data.students.filter((student) => student.membership_tier === 'Group').length,
   }
 
   return (
     <div className="grid gap-5">
       <PageHeader icon={Home} title="Dashboard" text="Overview of Margdarshak registrations and shortlist activity." />
-      <section className="grid grid-cols-5 gap-4">
+      <section className="grid grid-cols-4 gap-4">
         <Stat label="Total students" value={data.students.length.toString()} />
         <Stat label="Explorer" value={byTier.Explorer.toString()} />
         <Stat label="Guide" value={byTier.Guide.toString()} />
-        <Stat label="Group" value={byTier.Group.toString()} />
         <Stat label="Updated 24h" value={changed.length.toString()} accent />
       </section>
       <section className="grid gap-5 lg:grid-cols-3">
@@ -522,7 +544,6 @@ function StudentsPage({ data }: { data: DashboardData }) {
             <option value="">All tiers</option>
             <option value="Explorer">Explorer</option>
             <option value="Guide">Guide</option>
-            <option value="Group">Group</option>
           </select>
           <select className="input" value={category} onChange={(event) => setCategory(event.target.value)}>
             <option value="">All categories</option>
@@ -1081,7 +1102,7 @@ function safetyForRank(rank: number, cutoffRank: number | null | undefined): Saf
 }
 
 function tierPrice(tier: string | null | undefined): string {
-  const prices: Record<string, string> = { Explorer: '199', Guide: '399', Group: '897' }
+  const prices: Record<string, string> = { Explorer: '199', Guide: '299' }
   return prices[tier ?? ''] ?? '199'
 }
 

@@ -29,7 +29,7 @@ export const demoStudents: Student[] = [
     rank: 23600,
     category: 'SC',
     region: 'Nashik',
-    membership_tier: 'Group',
+    membership_tier: 'Guide',
   },
 ]
 

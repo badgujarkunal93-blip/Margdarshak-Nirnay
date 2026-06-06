@@ -1,6 +1,6 @@
 export type Category = 'General' | 'OBC' | 'SC' | 'ST' | 'VJ' | 'NT' | 'NT1' | 'NT2' | 'NT3' | 'EWS'
 export type SafetyLabel = 'SAFE' | 'MODERATE' | 'REACH'
-export type MembershipTier = 'Explorer' | 'Guide' | 'Group'
+export type MembershipTier = 'Explorer' | 'Guide'
 
 export type Student = {
   id: string
