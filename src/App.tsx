@@ -646,14 +646,17 @@ function StudentDetailPage({ data, onSaveCapList, onConfirm, isDemo }: { data: D
   const sensors = useSensors(useSensor(PointerSensor))
 
   const [localCutoffs, setLocalCutoffs] = useState<Cutoff[]>([])
+  const [loadingLocalCutoffs, setLoadingLocalCutoffs] = useState(false)
 
   useEffect(() => {
     if (isDemo || !isSupabaseConfigured) {
       setLocalCutoffs(data.cutoffs)
+      setLoadingLocalCutoffs(false)
       return
     }
 
     const fetchLocalCutoffs = async () => {
+      setLoadingLocalCutoffs(true)
       try {
         const pageSize = 1000
         const { data: firstPage, error: firstPageError, count } = await supabase
@@ -700,6 +703,8 @@ function StudentDetailPage({ data, onSaveCapList, onConfirm, isDemo }: { data: D
         setLocalCutoffs(mapped)
       } catch (err) {
         console.error('Error fetching local cutoffs:', err)
+      } finally {
+        setLoadingLocalCutoffs(false)
       }
     }
 
@@ -859,8 +864,13 @@ function StudentDetailPage({ data, onSaveCapList, onConfirm, isDemo }: { data: D
                 Confirm Payment Receipt
               </button>
             ) : null}
-            <button onClick={generateCapList} className="rounded-md bg-[#F97316] px-4 py-3 font-black text-white hover:bg-orange-600">
-              Generate CAP List
+            <button
+              onClick={generateCapList}
+              disabled={loadingLocalCutoffs}
+              className="inline-flex items-center gap-2 rounded-md bg-[#F97316] px-4 py-3 font-black text-white hover:bg-orange-600 disabled:opacity-50"
+            >
+              {loadingLocalCutoffs ? <Loader2 className="size-4 animate-spin" /> : null}
+              {loadingLocalCutoffs ? 'Loading data...' : 'Generate CAP List'}
             </button>
             <button onClick={save} disabled={!preferences.length || saving} className="inline-flex items-center gap-2 rounded-md bg-[#185FA5] px-4 py-3 font-black text-white hover:bg-blue-700 disabled:opacity-50">
               {saving ? <Loader2 className="size-4 animate-spin" /> : <Save className="size-4" />}
