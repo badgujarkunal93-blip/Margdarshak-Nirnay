@@ -89,9 +89,14 @@ function App() {
     if (cached) {
       try {
         const parsed = JSON.parse(cached)
-        setData(parsed)
-        setLoading(false)
-        return
+        const isValid = parsed && parsed.colleges && parsed.colleges.length > 0 && parsed.colleges.some((c: any) => c.branches && c.branches.length > 0)
+        if (isValid) {
+          setData(parsed)
+          setLoading(false)
+          return
+        } else {
+          sessionStorage.removeItem(cacheKey)
+        }
       } catch (e) {
         sessionStorage.removeItem(cacheKey)
       }
