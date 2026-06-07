@@ -84,6 +84,19 @@ function App() {
   const loadSupabaseData = async () => {
     setLoading(true)
 
+    const cacheKey = 'nirnay_dashboard_data'
+    const cached = sessionStorage.getItem(cacheKey)
+    if (cached) {
+      try {
+        const parsed = JSON.parse(cached)
+        setData(parsed)
+        setLoading(false)
+        return
+      } catch (e) {
+        sessionStorage.removeItem(cacheKey)
+      }
+    }
+
     // Load branches in pages to bypass the 1,000 row limit
     const branchesList: any[] = []
     let branchesPage = 0
@@ -103,14 +116,12 @@ function App() {
     const [
       { data: students },
       { data: dbColleges },
-      { data: dbCutoffs },
       { data: shortlists },
       { data: capLists },
       { data: capItems },
     ] = await Promise.all([
       supabase.from('students').select('*').order('created_at', { ascending: false }),
       supabase.from('colleges').select('*').order('name'),
-      supabase.from('cutoffs').select('*').order('year', { ascending: false }),
       supabase.from('shortlists').select('*').order('priority_order'),
       supabase.from('cap_lists').select('*').order('updated_at', { ascending: false }),
       supabase.from('cap_list_items').select('*').order('priority_order'),
@@ -122,25 +133,21 @@ function App() {
       branches: branchesList.filter((b) => b.college_id === c.id).map((b) => b.branch_name || b.name || ''),
     })) as College[]
 
-    const cutoffs = (dbCutoffs ?? []).map((c: any) => {
-      const branchObj = branchesList.find((b) => b.branch_code === c.branch_code)
-      return {
-        ...c,
-        branch: branchObj ? (branchObj.branch_name || branchObj.name || '') : c.branch_code || '',
-        round: `Round ${c.round}`,
-        rank_cutoff: c.closing_rank ?? c.opening_rank ?? 0,
-      }
-    }) as Cutoff[]
-
-    setData({
+    const freshData = {
       students: (students ?? []) as Student[],
       colleges,
-      cutoffs,
+      cutoffs: [],
       shortlists: (shortlists ?? []) as Shortlist[],
       capLists: (capLists ?? []) as CapList[],
       capListItems: (capItems ?? []) as CapListItem[],
       branches: branchesList as Branch[],
-    })
+    }
+    setData(freshData)
+    try {
+      sessionStorage.setItem(cacheKey, JSON.stringify(freshData))
+    } catch (e) {
+      console.warn('Failed to cache data in sessionStorage', e)
+    }
     setLoading(false)
   }
 
@@ -176,6 +183,16 @@ function App() {
       void supabase.removeChannel(channel)
     }
   }, [adminAuthed, isDemo])
+
+  useEffect(() => {
+    if (adminAuthed && data !== emptyData) {
+      try {
+        sessionStorage.setItem('nirnay_dashboard_data', JSON.stringify(data))
+      } catch (e) {
+        console.warn('Failed to cache data in sessionStorage', e)
+      }
+    }
+  }, [data, adminAuthed])
 
   const enterDemo = () => {
     setIsDemo(true)
@@ -217,6 +234,7 @@ function App() {
   }
 
   const logout = () => {
+    sessionStorage.removeItem('nirnay_dashboard_data')
     localStorage.removeItem(AUTH_KEY)
     setAdminAuthed(false)
     setIsDemo(false)
@@ -324,6 +342,46 @@ function App() {
     setData((current) => ({ ...current, cutoffs: [...((inserted ?? []) as Cutoff[]), ...current.cutoffs] }))
   }
 
+  const fetchCutoffsOnDemand = async () => {
+    if (data.cutoffs.length > 0 || isDemo || !isSupabaseConfigured) return
+    setLoading(true)
+    try {
+      const cutoffsList: any[] = []
+      let pageNum = 0
+      const pageSize = 1000
+      while (true) {
+        const { data: pageCutoffs, error: fetchErr } = await supabase
+          .from('cutoffs')
+          .select('*')
+          .range(pageNum * pageSize, (pageNum + 1) * pageSize - 1)
+        if (fetchErr) throw fetchErr
+        if (!pageCutoffs || pageCutoffs.length === 0) break
+        cutoffsList.push(...pageCutoffs)
+        if (pageCutoffs.length < pageSize) break
+        pageNum++
+      }
+
+      const mapped = cutoffsList.map((c: any) => {
+        const branchObj = data.branches.find((b) => b.branch_code === c.branch_code)
+        return {
+          ...c,
+          branch: branchObj ? (branchObj.branch_name || branchObj.name || '') : c.branch_code || '',
+          round: `Round ${c.round}`,
+          rank_cutoff: c.closing_rank ?? c.opening_rank ?? 0,
+        }
+      }) as Cutoff[]
+
+      setData((current) => ({
+        ...current,
+        cutoffs: mapped,
+      }))
+    } catch (e) {
+      console.error('Failed to load cutoffs on demand', e)
+    } finally {
+      setLoading(false)
+    }
+  }
+
   if (!adminAuthed) return <AdminLogin onLogin={login} />
 
   return (
@@ -337,7 +395,7 @@ function App() {
           <Route path="/students" element={<StudentsPage data={data} />} />
           <Route path="/students/:id" element={<StudentDetailPage data={data} onSaveCapList={saveCapList} onConfirm={confirmPayment} isDemo={isDemo} />} />
           <Route path="/cap-lists" element={<CapListsPage data={data} />} />
-          <Route path="/cutoffs" element={<CutoffPage data={data} onAddRows={addCutoffRows} />} />
+          <Route path="/cutoffs" element={<CutoffPage data={data} onAddRows={addCutoffRows} onLoadCutoffs={fetchCutoffsOnDemand} />} />
           <Route path="/export" element={<ExportPage data={data} />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
@@ -916,12 +974,25 @@ function PreferenceRow({ item, onNotes, onRemove }: { item: GeneratedPreference;
   )
 }
 
-function CutoffPage({ data, onAddRows }: { data: DashboardData; onAddRows: (rows: Cutoff[]) => Promise<void> }) {
+function CutoffPage({ data, onAddRows, onLoadCutoffs }: { data: DashboardData; onAddRows: (rows: Cutoff[]) => Promise<void>; onLoadCutoffs: () => Promise<void> }) {
   const [college, setCollege] = useState('')
   const [branch, setBranch] = useState('')
   const [category, setCategory] = useState('')
   const [year, setYear] = useState('')
   const [round, setRound] = useState('')
+  const [fetching, setFetching] = useState(false)
+
+  useEffect(() => {
+    const load = async () => {
+      if (data.cutoffs.length === 0) {
+        setFetching(true)
+        await onLoadCutoffs()
+        setFetching(false)
+      }
+    }
+    void load()
+  }, [onLoadCutoffs, data.cutoffs.length])
+
   const filtered = data.cutoffs.filter((cutoff) =>
     (!college || cutoff.college_id === college) &&
     (!branch || cutoff.branch === branch) &&
@@ -950,6 +1021,15 @@ function CutoffPage({ data, onAddRows }: { data: DashboardData; onAddRows: (rows
       } satisfies Cutoff
     }).filter((row) => row.college_id && row.branch && row.category && row.round && row.year && row.rank_cutoff)
     await onAddRows(parsed)
+  }
+
+  if (fetching) {
+    return (
+      <div className="grid gap-5">
+        <PageHeader icon={Database} title="Cut-off Data" text="Filter and bulk import cutoff rows." />
+        <LoadingPanel label="Loading cut-off data from database..." />
+      </div>
+    )
   }
 
   return (
