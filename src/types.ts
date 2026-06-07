@@ -33,6 +33,7 @@ export type College = {
   established_year: number | null
   accreditation: string | null
   placement_avg: number | null
+  college_code?: string
 }
 
 export type Cutoff = {

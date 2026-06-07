@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import type { FormEvent } from 'react'
 import { jsPDF } from 'jspdf'
 import { closestCenter, DndContext, PointerSensor, useDraggable, useDroppable, useSensor, useSensors } from '@dnd-kit/core'
@@ -138,13 +138,23 @@ function App() {
       branches: branchesList.filter((b) => b.college_id === c.id).map((b) => b.branch_name || b.name || ''),
     })) as College[]
 
+    const mappedCapItems = (capItems ?? []).map((item: any) => {
+      const branchRecord = branchesList.find(
+        (b) => b.branch_code === item.branch_code && b.college_id === item.college_id
+      )
+      return {
+        ...item,
+        branch: branchRecord ? (branchRecord.branch_name || branchRecord.name || '') : item.branch_code || '',
+      }
+    })
+
     const freshData = {
       students: (students ?? []) as Student[],
       colleges,
       cutoffs: [],
       shortlists: (shortlists ?? []) as Shortlist[],
       capLists: (capLists ?? []) as CapList[],
-      capListItems: (capItems ?? []) as CapListItem[],
+      capListItems: mappedCapItems as CapListItem[],
       branches: branchesList as Branch[],
     }
     setData(freshData)
@@ -289,21 +299,44 @@ function App() {
     const capList = savedList as CapList
     await supabase.from('cap_list_items').delete().eq('cap_list_id', capList.id)
 
-    const payload = preferences.map((item) => ({
-      cap_list_id: capList.id,
-      college_id: item.college_id,
-      branch: item.branch,
-      priority_order: item.priority_order,
-      safety_label: item.safety_label,
-      notes: item.notes,
-    }))
+    const payload = preferences.map((item) => {
+      const college = data.colleges.find((c) => c.id === item.college_id)
+      const collegeCode = college?.college_code || ''
+      const branchRecord = data.branches.find(
+        (b) =>
+          b.college_id === item.college_id &&
+          (b.branch_name === item.branch || b.name === item.branch || b.branch === item.branch)
+      )
+      const branchCode = branchRecord?.branch_code || ''
+
+      return {
+        cap_list_id: capList.id,
+        college_id: item.college_id,
+        college_code: collegeCode,
+        branch_code: branchCode,
+        priority_order: item.priority_order,
+        safety_label: item.safety_label,
+        notes: item.notes,
+      }
+    })
+
     const { data: savedItems, error: itemsError } = await supabase.from('cap_list_items').insert(payload).select('*')
     if (itemsError) throw itemsError
+
+    const mappedSavedItems = (savedItems ?? []).map((item: any) => {
+      const branchRecord = data.branches.find(
+        (b) => b.branch_code === item.branch_code && b.college_id === item.college_id
+      )
+      return {
+        ...item,
+        branch: branchRecord ? (branchRecord.branch_name || branchRecord.name || '') : item.branch_code || '',
+      }
+    })
 
     setData((current) => ({
       ...current,
       capLists: [capList, ...current.capLists.filter((list) => list.id !== capList.id)],
-      capListItems: [...current.capListItems.filter((item) => item.cap_list_id !== capList.id), ...((savedItems ?? []) as CapListItem[])],
+      capListItems: [...current.capListItems.filter((item) => item.cap_list_id !== capList.id), ...mappedSavedItems],
     }))
   }
 
@@ -681,6 +714,73 @@ function StudentDetailPage({ data, onSaveCapList, onConfirm, isDemo }: { data: D
 
   const [localCutoffs, setLocalCutoffs] = useState<Cutoff[]>([])
   const [loadingLocalCutoffs, setLoadingLocalCutoffs] = useState(false)
+  const [loadedStudentId, setLoadedStudentId] = useState<string | null>(null)
+  const [generationBranchFilter, setGenerationBranchFilter] = useState('ALL')
+
+  const uniqueBranches = useMemo(() => {
+    return Array.from(
+      new Set(data.branches.map((b) => b.branch_name || b.name || b.branch || '').filter(Boolean))
+    ).sort()
+  }, [data.branches])
+
+  useEffect(() => {
+    if (!student || student.id === loadedStudentId) return
+
+    const list = data.capLists.find((l) => l.student_id === student.id)
+    setCategory((student.category ?? 'General') as Category)
+    setDistrict(student.region ?? '')
+    setNotes(list?.counsellor_notes ?? '')
+
+    if (list) {
+      const listItems = data.capListItems
+        .filter((item) => item.cap_list_id === list.id)
+        .sort((a, b) => a.priority_order - b.priority_order)
+
+      const mapped = listItems.map((item) => {
+        const college = data.colleges.find((c) => c.id === item.college_id)
+        const cutoff = localCutoffs.find((c) => c.college_id === item.college_id && c.branch === item.branch && c.category === category)
+        const rank = cutoffRank(cutoff)
+        const inShortlist = data.shortlists.some((s) => s.student_id === student.id && s.college_id === item.college_id && s.branch === item.branch)
+        return {
+          id: item.id,
+          college_id: item.college_id,
+          college_name: college?.name ?? 'Unknown College',
+          district: college?.district ?? '',
+          branch: item.branch,
+          cutoff_rank: rank ?? 0,
+          safety_label: item.safety_label,
+          priority_order: item.priority_order,
+          notes: item.notes ?? '',
+          from_shortlist: inShortlist,
+        }
+      })
+      setPreferences(mapped)
+    } else {
+      setPreferences([])
+    }
+    setLoadedStudentId(student.id)
+  }, [student, data.capLists, data.capListItems, data.colleges, localCutoffs, loadedStudentId, category])
+
+  useEffect(() => {
+    if (localCutoffs.length === 0 || preferences.length === 0 || !student) return
+    setPreferences((current) =>
+      current.map((item) => {
+        if (item.cutoff_rank > 0) return item
+        const cutoff = localCutoffs.find(
+          (c) => c.college_id === item.college_id && c.branch === item.branch && c.category === category
+        )
+        const rank = cutoffRank(cutoff)
+        if (rank) {
+          return {
+            ...item,
+            cutoff_rank: rank,
+            safety_label: safetyForRank(student.rank, rank),
+          }
+        }
+        return item
+      })
+    )
+  }, [localCutoffs, category, student?.rank])
 
   useEffect(() => {
     if (isDemo || !isSupabaseConfigured) {
@@ -760,8 +860,19 @@ function StudentDetailPage({ data, onSaveCapList, onConfirm, isDemo }: { data: D
   const selectedCollegeRecord = data.colleges.find((college) => college.id === selectedCollege)
 
   const generateCapList = () => {
+    const csKeywords = ['computer', 'cs', 'information technology', 'it', 'software', 'data science', 'artificial intelligence', 'ai', 'ml', 'cyber', 'machine learning', 'iot']
+    const matchesFilter = (branchName: string) => {
+      if (generationBranchFilter === 'ALL') return true
+      const normalized = branchName.toLowerCase()
+      if (generationBranchFilter === 'CS_ALLIED') {
+        return csKeywords.some(keyword => normalized.includes(keyword))
+      }
+      return branchName === generationBranchFilter
+    }
+
     const shortlistPrefs = shortlist
       .map((item): GeneratedPreference | null => {
+        if (!matchesFilter(item.branch)) return null
         const college = data.colleges.find((entry) => entry.id === item.college_id)
         const cutoff = localCutoffs.find((entry) => entry.college_id === item.college_id && entry.branch === item.branch && entry.category === category)
         if (!college) return null
@@ -782,8 +893,8 @@ function StudentDetailPage({ data, onSaveCapList, onConfirm, isDemo }: { data: D
       .filter((item): item is GeneratedPreference => Boolean(item))
 
     const shortlistKeys = new Set(shortlistPrefs.map((item) => item.id))
-    const generated = localCutoffs
-      .filter((cutoff) => cutoff.category === category)
+    const generatedRaw = localCutoffs
+      .filter((cutoff) => cutoff.category === category && matchesFilter(cutoff.branch))
       .map((cutoff): GeneratedPreference | null => {
         const college = data.colleges.find((item) => item.id === cutoff.college_id)
         if (!college) return null
@@ -802,14 +913,23 @@ function StudentDetailPage({ data, onSaveCapList, onConfirm, isDemo }: { data: D
         }
       })
       .filter((item): item is GeneratedPreference => Boolean(item))
-      .filter((item) => !shortlistKeys.has(item.id))
-      .sort((a, b) => {
-        const districtScore = Number(b.district === district) - Number(a.district === district)
-        if (districtScore !== 0) return districtScore
-        return Math.abs(a.cutoff_rank - student.rank) - Math.abs(b.cutoff_rank - student.rank)
-      })
 
-    const merged = [...shortlistPrefs, ...generated].slice(0, 60).map((item, index) => ({ ...item, priority_order: index + 1 }))
+    const uniqueGenerated: GeneratedPreference[] = []
+    const seenIds = new Set(shortlistKeys)
+    for (const item of generatedRaw) {
+      if (!seenIds.has(item.id)) {
+        seenIds.add(item.id)
+        uniqueGenerated.push(item)
+      }
+    }
+
+    uniqueGenerated.sort((a, b) => {
+      const districtScore = Number(b.district === district) - Number(a.district === district)
+      if (districtScore !== 0) return districtScore
+      return Math.abs(a.cutoff_rank - student.rank) - Math.abs(b.cutoff_rank - student.rank)
+    })
+
+    const merged = [...shortlistPrefs, ...uniqueGenerated].slice(0, 60).map((item, index) => ({ ...item, priority_order: index + 1 }))
     setPreferences(merged)
     setStatus(`Generated ${merged.length} preferences.`)
   }
@@ -874,7 +994,7 @@ function StudentDetailPage({ data, onSaveCapList, onConfirm, isDemo }: { data: D
             <Info label="Payment" value={student.payment_status === 'confirmed' ? 'Confirmed' : 'Pending'} />
             <Info label="Phone" value={student.phone} />
           </div>
-          <div className="mt-5 grid grid-cols-3 gap-3">
+          <div className="mt-5 grid grid-cols-4 gap-3">
             <label className="grid gap-2 text-sm font-bold text-[#185FA5]">
               Confirm category
               <select className="input" value={category} onChange={(event) => setCategory(event.target.value as Category)}>
@@ -884,6 +1004,18 @@ function StudentDetailPage({ data, onSaveCapList, onConfirm, isDemo }: { data: D
             <label className="grid gap-2 text-sm font-bold text-[#185FA5]">
               Home district
               <input className="input" value={district} onChange={(event) => setDistrict(event.target.value)} />
+            </label>
+            <label className="grid gap-2 text-sm font-bold text-[#185FA5]">
+              Branch Filter
+              <select className="input" value={generationBranchFilter} onChange={(event) => setGenerationBranchFilter(event.target.value)}>
+                <option value="ALL">All Branches</option>
+                <option value="CS_ALLIED">CS & Allied</option>
+                {uniqueBranches.map((b) => (
+                  <option key={b} value={b}>
+                    {b}
+                  </option>
+                ))}
+              </select>
             </label>
             <label className="grid gap-2 text-sm font-bold text-[#185FA5]">
               Counsellor notes
