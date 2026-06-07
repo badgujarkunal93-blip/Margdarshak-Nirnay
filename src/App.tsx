@@ -24,7 +24,6 @@ import {
   Upload,
   UserRound,
   Users,
-  UserPlus,
 } from 'lucide-react'
 import {
   demoCapListItems,
@@ -43,7 +42,6 @@ import type {
   College,
   Cutoff,
   GeneratedPreference,
-  GroupInvite,
   SafetyLabel,
   Shortlist,
   Student,
@@ -63,7 +61,6 @@ type DashboardData = {
   shortlists: Shortlist[]
   capLists: CapList[]
   capListItems: CapListItem[]
-  groups: GroupInvite[]
   branches: Branch[]
 }
 
@@ -74,7 +71,6 @@ const emptyData: DashboardData = {
   shortlists: [],
   capLists: [],
   capListItems: [],
-  groups: [],
   branches: [],
 }
 
@@ -111,7 +107,6 @@ function App() {
       { data: shortlists },
       { data: capLists },
       { data: capItems },
-      { data: groups },
     ] = await Promise.all([
       supabase.from('students').select('*').order('created_at', { ascending: false }),
       supabase.from('colleges').select('*').order('name'),
@@ -119,7 +114,6 @@ function App() {
       supabase.from('shortlists').select('*').order('priority_order'),
       supabase.from('cap_lists').select('*').order('updated_at', { ascending: false }),
       supabase.from('cap_list_items').select('*').order('priority_order'),
-      supabase.from('group_invites').select('*').order('created_at', { ascending: false }),
     ])
 
     const colleges = (dbColleges ?? []).map((c: any) => ({
@@ -145,7 +139,6 @@ function App() {
       shortlists: (shortlists ?? []) as Shortlist[],
       capLists: (capLists ?? []) as CapList[],
       capListItems: (capItems ?? []) as CapListItem[],
-      groups: (groups ?? []) as GroupInvite[],
       branches: branchesList as Branch[],
     })
     setLoading(false)
@@ -195,16 +188,6 @@ function App() {
       shortlists: demoShortlists,
       capLists: demoCapLists,
       capListItems: demoCapListItems,
-      groups: [
-        {
-          id: 'group-1',
-          invite_code: 'MGD123',
-          created_by_student_id: demoStudents[0]?.id ?? '',
-          max_members: 5,
-          current_members: 3,
-          is_active: true,
-        },
-      ],
       branches: [],
     })
   }
@@ -341,16 +324,6 @@ function App() {
     setData((current) => ({ ...current, cutoffs: [...((inserted ?? []) as Cutoff[]), ...current.cutoffs] }))
   }
 
-  const toggleGroup = async (group: GroupInvite) => {
-    const next = !group.is_active
-    setData((current) => ({
-      ...current,
-      groups: current.groups.map((item) => (item.id === group.id ? { ...item, is_active: next } : item)),
-    }))
-
-    if (!isDemo) await supabase.from('group_invites').update({ is_active: next }).eq('id', group.id)
-  }
-
   if (!adminAuthed) return <AdminLogin onLogin={login} />
 
   return (
@@ -365,7 +338,6 @@ function App() {
           <Route path="/students/:id" element={<StudentDetailPage data={data} onSaveCapList={saveCapList} onConfirm={confirmPayment} isDemo={isDemo} />} />
           <Route path="/cap-lists" element={<CapListsPage data={data} />} />
           <Route path="/cutoffs" element={<CutoffPage data={data} onAddRows={addCutoffRows} />} />
-          <Route path="/groups" element={<GroupsPage data={data} onToggle={toggleGroup} />} />
           <Route path="/export" element={<ExportPage data={data} />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
@@ -403,7 +375,7 @@ function AdminLogin({ onLogin }: { onLogin: (email: string, password: string) =>
           </div>
           <h1 className="mt-6 max-w-3xl text-5xl font-black leading-tight">मार्गदर्शक निर्णय</h1>
           <p className="mt-5 max-w-2xl text-lg leading-8 text-blue-50">
-            Counsellor dashboard for student shortlist monitoring, CAP list generation, group management, cutoff import,
+            Counsellor dashboard for student shortlist monitoring, CAP list generation, cutoff import,
             and printable exports.
           </p>
         </section>
@@ -439,7 +411,6 @@ function AdminShell({ isDemo, onLogout, children }: { isDemo: boolean; onLogout:
     { to: '/students', label: 'Students', icon: Users },
     { to: '/cap-lists', label: 'CAP Lists', icon: ListChecks },
     { to: '/cutoffs', label: 'Cut-off Data', icon: Database },
-    { to: '/groups', label: 'Groups', icon: UserPlus },
     { to: '/export', label: 'Export', icon: FileText },
   ]
 
@@ -1023,30 +994,6 @@ function CutoffPage({ data, onAddRows }: { data: DashboardData; onAddRows: (rows
   )
 }
 
-function GroupsPage({ data, onToggle }: { data: DashboardData; onToggle: (group: GroupInvite) => Promise<void> }) {
-  return (
-    <div className="grid gap-5">
-      <PageHeader icon={UserPlus} title="Groups" text="Manage Margdarshak group invite codes." />
-      <DataTable>
-        <thead><tr className="bg-slate-50 text-left text-xs font-black uppercase tracking-[0.12em] text-slate-500"><th className="table-cell">Invite code</th><th className="table-cell">Creator</th><th className="table-cell">Members</th><th className="table-cell">Status</th><th className="table-cell">Action</th></tr></thead>
-        <tbody className="divide-y divide-slate-100">
-          {data.groups.map((group) => {
-            const creator = data.students.find((student) => student.id === group.created_by_student_id)
-            return (
-              <tr key={group.id}>
-                <td className="table-cell font-mono text-lg font-black text-[#185FA5]">{group.invite_code}</td>
-                <td className="table-cell">{creator?.name ?? group.created_by_student_id}</td>
-                <td className="table-cell">{group.current_members}/{group.max_members}</td>
-                <td className="table-cell">{group.is_active === false ? 'Disabled' : 'Active'}</td>
-                <td className="table-cell"><button onClick={() => onToggle(group)} className="rounded-md bg-[#185FA5] px-3 py-2 text-sm font-black text-white">{group.is_active === false ? 'Enable' : 'Disable'}</button></td>
-              </tr>
-            )
-          })}
-        </tbody>
-      </DataTable>
-    </div>
-  )
-}
 
 function ExportPage({ data }: { data: DashboardData }) {
   const [studentId, setStudentId] = useState(data.students[0]?.id ?? '')

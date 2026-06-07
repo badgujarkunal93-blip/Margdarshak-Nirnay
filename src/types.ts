@@ -88,16 +88,6 @@ export type GeneratedPreference = {
   from_shortlist: boolean
 }
 
-export type GroupInvite = {
-  id: string
-  invite_code: string
-  created_by_student_id: string
-  max_members: number
-  current_members: number
-  is_active?: boolean | null
-  created_at?: string
-}
-
 export type Branch = {
   id: string
   college_id?: string | null
