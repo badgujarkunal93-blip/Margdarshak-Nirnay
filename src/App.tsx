@@ -687,12 +687,21 @@ function StudentDetailPage({ data, onSaveCapList, onConfirm, isDemo }: { data: D
     const fetchLocalCutoffs = async () => {
       setLoadingLocalCutoffs(true)
       try {
+        // Find the latest year available in the database
+        const { data: maxYearData } = await supabase
+          .from('cutoffs')
+          .select('year')
+          .order('year', { ascending: false })
+          .limit(1)
+        const latestYear = maxYearData && maxYearData[0] ? maxYearData[0].year : 2024
+
+        // Fetch page 0 of cutoffs for the latest year and the student's category
         const pageSize = 1000
         const { data: firstPage, error: firstPageError, count } = await supabase
           .from('cutoffs')
-          .select('*', { count: 'exact' })
+          .select('college_id,branch_code,category,round,year,closing_rank,opening_rank', { count: 'exact' })
           .eq('category', category)
-          .order('year', { ascending: false })
+          .eq('year', latestYear)
           .range(0, pageSize - 1)
 
         if (firstPageError) throw firstPageError
@@ -704,9 +713,9 @@ function StudentDetailPage({ data, onSaveCapList, onConfirm, isDemo }: { data: D
             const pageNum = i + 1
             return supabase
               .from('cutoffs')
-              .select('*')
+              .select('college_id,branch_code,category,round,year,closing_rank,opening_rank')
               .eq('category', category)
-              .order('year', { ascending: false })
+              .eq('year', latestYear)
               .range(pageNum * pageSize, (pageNum + 1) * pageSize - 1)
           })
 
